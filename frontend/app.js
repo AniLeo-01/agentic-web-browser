@@ -599,7 +599,7 @@ document.getElementById('filter-url').addEventListener('keydown', e => {
 function renderHistory(rows) {
   const tbody = document.getElementById('history-body');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No results yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No results yet</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((r, i) => {
@@ -609,7 +609,7 @@ function renderHistory(rows) {
     const scoreClass = score >= 0.7 ? 'score-high' : score >= 0.4 ? 'score-mid' : 'score-low';
     const task = r.task.length > 50 ? r.task.slice(0, 50) + '...' : r.task;
     return `
-      <tr>
+      <tr data-result-id="${r.id}">
         <td style="white-space:nowrap">${time}</td>
         <td title="${esc(r.url)}">${esc(host)}</td>
         <td title="${esc(r.task)}">${esc(task)}</td>
@@ -618,6 +618,7 @@ function renderHistory(rows) {
         <td>${r.steps_taken}</td>
         <td>${r.duration_seconds.toFixed(1)}s</td>
         <td><button class="btn-secondary" onclick="showDetail(${i})">View</button></td>
+        <td><button class="btn-icon btn-delete" onclick="deleteResult(${r.id}, this)" title="Delete">&times;</button></td>
       </tr>`;
   }).join('');
 
@@ -721,6 +722,37 @@ function renderStepDetails(steps) {
       </div>
     </div>`;
 }
+
+// ── Delete Records ──
+async function deleteResult(id, btn) {
+  if (!confirm('Delete this record?')) return;
+  const row = btn.closest('tr');
+  try {
+    const res = await fetch(`/api/results/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.deleted) {
+      animate(row, {
+        opacity: [1, 0], translateX: [0, 30], duration: 250, ease: 'inQuad',
+        onComplete: () => {
+          allHistory = allHistory.filter(r => r.id !== id);
+          applyHistoryFilter();
+        },
+      });
+    }
+  } catch { /* ignore */ }
+}
+
+document.getElementById('clear-all-btn').addEventListener('click', async () => {
+  if (!confirm('Delete ALL history records? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/results', { method: 'DELETE' });
+    const data = await res.json();
+    if (data.deleted) {
+      allHistory = [];
+      applyHistoryFilter();
+    }
+  } catch { /* ignore */ }
+});
 
 // ── Helpers ──
 function esc(str) {

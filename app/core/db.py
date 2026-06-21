@@ -355,6 +355,26 @@ def get_url_performance(url: str) -> dict:
     }
 
 
+def delete_result(result_id: int) -> bool:
+    """Delete a single result by ID. Returns True if a row was deleted."""
+    conn = get_connection()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM browse_results WHERE id = ?", [result_id]
+    ).fetchone()[0]
+    if count == 0:
+        return False
+    conn.execute("DELETE FROM browse_results WHERE id = ?", [result_id])
+    return True
+
+
+def delete_all_results() -> int:
+    """Delete all results. Returns the number of rows deleted."""
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM browse_results").fetchone()[0]
+    conn.execute("DELETE FROM browse_results")
+    return count
+
+
 def get_all_urls() -> list[str]:
     """Return all distinct URLs that have been browsed."""
     conn = get_connection()

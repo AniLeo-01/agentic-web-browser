@@ -290,6 +290,34 @@ input::placeholder {
   text-shadow: 0 0 10px var(--danger-glow);
 }
 
+.btn-delete {
+  font-size: 1rem;
+  opacity: 0.4;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.btn-delete:hover {
+  opacity: 1;
+}
+
+.btn-danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.btn-danger:hover {
+  background: var(--danger-glow);
+  text-shadow: 0 0 10px var(--danger-glow);
+  box-shadow: 0 0 15px var(--danger-glow);
+}
+
 /* Job Queue */
 .job-card {
   position: relative;

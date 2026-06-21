@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter
 
 from app.agent.browser import run_agent_task
-from app.core.db import get_all_urls, get_dashboard_stats, get_results, get_url_performance, save_result
+from app.core.db import delete_all_results, delete_result, get_all_urls, get_dashboard_stats, get_results, get_url_performance, save_result
 from app.core.models import TaskRequest
 
 router = APIRouter()
@@ -107,6 +107,21 @@ async def dashboard() -> dict:
 @router.get("/urls")
 async def urls() -> list[str]:
     return get_all_urls()
+
+
+@router.delete("/results/{result_id}")
+async def remove_result(result_id: int) -> dict:
+    """Delete a single result by ID."""
+    if delete_result(result_id):
+        return {"deleted": True, "id": result_id}
+    return {"deleted": False, "error": "Result not found"}
+
+
+@router.delete("/results")
+async def remove_all_results() -> dict:
+    """Delete all results."""
+    count = delete_all_results()
+    return {"deleted": True, "count": count}
 
 
 @router.get("/performance")

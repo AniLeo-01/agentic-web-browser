@@ -26,11 +26,14 @@ app/
 │   ├── tools.py           # Browser tools (search, go_back, close_popups)
 │   └── prompts.py         # Agent instructions and prompt templates
 ├── api/
-│   └── routes.py          # POST /api/browse, GET /api/results
+│   └── routes.py          # POST /api/browse, GET /api/results, dashboard endpoints
 └── core/
     ├── config.py          # Settings from .env (pydantic-settings)
     ├── db.py              # DuckDB connection and queries
-    └── models.py          # Pydantic request/response models
+    ├── models.py          # Pydantic request/response models
+    └── scoring.py         # Scoring formulas and weights
+frontend/
+└── index.html             # Single-file dashboard UI
 tests/
 ├── conftest.py            # TestClient fixture with in-memory DB
 └── test_api.py            # API endpoint tests
@@ -71,11 +74,13 @@ AGENT_MAX_STEPS=20
 uv run uvicorn app.main:app --reload
 ```
 
+Then open [http://localhost:8000](http://localhost:8000) to access the dashboard.
+
 ## API
 
 ### `POST /api/browse`
 
-Submit a URL and a list of tasks for the agent to perform.
+Submit a URL and a list of tasks for the agent to perform. Returns immediately with a `job_id` — tasks run asynchronously in the background.
 
 **Request:**
 ```json
@@ -88,18 +93,18 @@ Submit a URL and a list of tasks for the agent to perform.
 **Response:**
 ```json
 {
-  "url": "https://www.netflix.com/",
-  "results": [
-    {
-      "task": "Find the available subscription plans and their prices",
-      "found": true,
-      "confidence": 0.8,
-      "answer": "Mobile (₹149/month), Basic (₹199/month), Standard (₹499/month), Premium (₹649/month)",
-      "error": null
-    }
-  ]
+  "job_id": "a1b2c3d4e5f6",
+  "status": "running"
 }
 ```
+
+### `GET /api/jobs/{job_id}`
+
+Poll for job status and results.
+
+### `GET /api/jobs`
+
+List all jobs, newest first.
 
 ### `GET /api/results`
 
@@ -109,32 +114,58 @@ Query stored results. Optionally filter by URL.
 GET /api/results?url=https://www.netflix.com/&limit=10
 ```
 
+### `GET /api/dashboard`
+
+Aggregated stats across all runs: average scores, per-URL breakdown, top issues, and recommendations.
+
+### `GET /api/performance?url=...`
+
+Detailed performance breakdown for a single URL, including all individual runs.
+
+### `GET /api/urls`
+
+List all distinct URLs that have been tested.
+
 ### `GET /health`
 
 Health check endpoint.
 
 ## Scoring
 
-Each agent run is evaluated across five dimensions (0.0–1.0), combined into a weighted overall score:
+Each agent run produces an **Agent Readiness Score** — a composite metric reflecting how well an agent can navigate and extract information from the target site. The score is computed across five dimensions, each rated 0.0–1.0, then combined via weighted average.
 
-| Dimension | Weight | Description |
+### Dimensions
+
+| Dimension | Weight | Formula |
 |---|---|---|
-| **Completeness** | 30% | Was the information found? Binary: 1.0 if found, 0.0 otherwise. |
-| **Confidence** | 25% | Agent's self-reported confidence in its answer (0.0–1.0). |
-| **Efficiency** | 15% | Fewer steps = better. 1 step = 1.0, scales linearly to 0.0 at max steps. |
-| **Speed** | 10% | Under 60s = 1.0, scales linearly to 0.0 at 300s (5x baseline). |
-| **Reliability** | 20% | No errors = 1.0, each code execution error reduces by 0.25. |
+| **Completeness** | 30% | `1.0` if the information was found, `0.0` otherwise. |
+| **Confidence** | 25% | The agent's self-reported certainty (0.0–1.0), clamped to that range. |
+| **Efficiency** | 15% | `1.0 - (steps_taken - 1) / (max_steps - 1)`. 1 step = perfect, max steps = 0. |
+| **Speed** | 10% | `1.0` if under 60s. Above 60s, scales linearly to `0.0` at 300s. |
+| **Reliability** | 20% | `1.0 - (errors * 0.25)`. Each code execution error costs 0.25. Capped at 0.5 if the task failed. |
 
-**Overall Score** = weighted average of all five dimensions.
+**Overall Score** = `0.30 * completeness + 0.25 * confidence + 0.20 * reliability + 0.15 * efficiency + 0.10 * speed`
 
-The confidence score is self-reported by the LLM — the agent is prompted to rate its certainty from 0.0–1.0 based on how clearly the information was visible on the page.
+### Confidence Scoring
+
+The confidence score is self-reported by the LLM. The agent is prompted to rate its certainty based on how clearly the information was visible on the page:
+
+| Range | Meaning |
+|---|---|
+| 0.9–1.0 | Information clearly visible, directly matches the task |
+| 0.7–0.8 | Information found but may be incomplete or partially inferred |
+| 0.4–0.6 | Information is ambiguous, possibly outdated, or required guessing |
+| 0.1–0.3 | Very uncertain, could not verify the information |
+
+If the agent cannot find the information at all, it returns `NOT_FOUND` with a reason, and the run scores 0 for both completeness and confidence.
 
 ### Dashboard Insights
 
 The dashboard automatically analyzes run data to surface:
 
+- **Overall Agent Readiness Score**: The composite weighted score across all runs.
 - **Top Issues Identified**: Key friction points like high failure rates, low confidence, excessive steps, slow runs, or frequent code errors — ranked by severity (high/medium/low).
-- **Recommendations for Improvement**: Actionable suggestions based on the identified issues, such as improving task prompts, testing on simpler pages first, or addressing agent-unfriendly page patterns (login walls, CAPTCHAs, infinite scroll).
+- **Recommendations for Improvement**: Actionable suggestions based on the identified issues, such as improving task prompts, testing on simpler pages first, or addressing agent-unfriendly page patterns.
 - **Per-URL Performance**: Select any tested URL to see its score breakdown, radar chart, and individual run details with expandable step-by-step agent reasoning.
 
 ### Step-Level Traceability
@@ -147,6 +178,28 @@ Each run stores per-step details: the agent's reasoning, the code it executed, i
 - **Request validation**: Maximum 10 tasks per request, no empty tasks allowed.
 - **Timeout**: Agent tasks are bounded by `AGENT_MAX_STEPS` (default 20) and a 300-second wall-clock limit.
 - **Browser crash recovery**: The browser is always killed in a `finally` block, with exception handling to prevent cleanup failures from propagating.
+
+## Limitations
+
+### CAPTCHAs and Bot Detection
+
+The agent runs in a headless Chrome browser and **cannot solve CAPTCHAs** (reCAPTCHA, hCaptcha, Cloudflare Turnstile, etc.). Sites that gate content behind CAPTCHAs will cause the agent to fail or return `NOT_FOUND`. Similarly, aggressive bot-detection mechanisms (browser fingerprinting, Cloudflare "checking your browser" interstitials) may block the agent before it can interact with the page at all.
+
+### Login-Protected Content
+
+The agent is explicitly instructed not to log in to websites. Any content behind authentication walls — account dashboards, gated pricing pages, members-only documentation — is inaccessible.
+
+### Dynamic and JavaScript-Heavy Pages
+
+While the agent uses a full browser and can handle JavaScript rendering, heavily dynamic pages (single-page apps with complex client-side routing, infinite scroll, lazy-loaded content) may reduce confidence and efficiency. The agent relies on screenshots and visible text, so content that requires specific user interactions to reveal (hover menus, accordion panels) may be missed.
+
+### Single-Browser Bottleneck
+
+Only one agent task runs at a time due to the shared headless Chrome instance. Submitting many tasks or URLs will result in serial execution. Tasks queued for more than 5 minutes will time out.
+
+### Confidence Is Self-Reported
+
+The confidence score comes from the LLM's own assessment, not from an independent verification. The agent may be overconfident about incorrect answers or underconfident about correct ones.
 
 ## Testing
 

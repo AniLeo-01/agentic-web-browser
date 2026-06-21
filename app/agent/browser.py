@@ -1,3 +1,4 @@
+import os
 import re
 import threading
 import time
@@ -8,6 +9,7 @@ import anyio.to_thread
 import helium
 from PIL import Image
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 
 from smolagents import CodeAgent, OpenAIModel
 from smolagents.agents import ActionStep
@@ -60,6 +62,16 @@ def _create_driver() -> webdriver.Chrome:
     chrome_options.add_argument("--force-device-scale-factor=1")
     chrome_options.add_argument("--window-size=1000,1350")
     chrome_options.add_argument("--disable-pdf-viewer")
+    # Support Chromium in Docker (set via CHROME_BIN / CHROMEDRIVER_PATH env vars)
+    chrome_bin = os.environ.get("CHROME_BIN")
+    if chrome_bin:
+        chrome_options.binary_location = chrome_bin
+    chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
+    if chromedriver_path and os.path.isfile(chromedriver_path):
+        service = Service(executable_path=chromedriver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        helium.set_driver(driver)
+        return driver
     return helium.start_chrome(headless=True, options=chrome_options)
 
 

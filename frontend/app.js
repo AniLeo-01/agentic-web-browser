@@ -122,21 +122,15 @@ tasksContainer.addEventListener('click', e => {
   }
 });
 
-// ── Browse Form Submit ──
+// ── Job Queue ──
+const activeJobs = new Map(); // job_id -> { url, tasks, status }
+let pollInterval = null;
+
 document.getElementById('browse-form').addEventListener('submit', async e => {
   e.preventDefault();
   const url = document.getElementById('url').value;
   const tasks = [...document.querySelectorAll('.task-input')].map(i => i.value).filter(Boolean);
   if (!tasks.length) return;
-
-  const status = document.getElementById('run-status');
-  const resultsDiv = document.getElementById('run-results');
-  const submitBtn = document.getElementById('submit-btn');
-
-  resultsDiv.classList.add('hidden');
-  status.classList.remove('hidden');
-  animate(status, { opacity: [0, 1], scale: [0.95, 1], duration: 300, ease: 'outQuad' });
-  submitBtn.disabled = true;
 
   try {
     const res = await fetch('/api/browse', {
@@ -145,46 +139,129 @@ document.getElementById('browse-form').addEventListener('submit', async e => {
       body: JSON.stringify({ url, tasks }),
     });
     const data = await res.json();
-    renderResults(data);
+    if (data.job_id) {
+      activeJobs.set(data.job_id, { url, tasks, status: 'running' });
+      renderJobsQueue();
+      startPolling();
+    }
   } catch (err) {
-    resultsDiv.innerHTML = `<p style="color: var(--danger)">Error: ${err.message}</p>`;
-    resultsDiv.classList.remove('hidden');
-  } finally {
-    status.classList.add('hidden');
-    submitBtn.disabled = false;
+    // Show inline error in queue
+    const tempId = 'err-' + Date.now();
+    activeJobs.set(tempId, { url, tasks, status: 'completed', error: err.message, results: [] });
+    renderJobsQueue();
   }
 });
 
-// ── Render Results ──
-function renderResults(data) {
-  const container = document.getElementById('results-list');
-  container.innerHTML = data.results.map(r => `
-    <div class="result-card">
-      <div class="result-header">
-        <span class="result-task">${esc(r.task)}</span>
-        <span class="badge ${r.found ? 'badge-success' : 'badge-error'}">
-          ${r.found ? 'Found' : 'Not Found'}
-        </span>
-      </div>
-      ${r.answer ? `<div class="result-answer">${esc(r.answer)}</div>` : ''}
-      ${r.error ? `<div class="result-answer" style="color: var(--danger)">${esc(r.error)}</div>` : ''}
-      <div class="result-meta">
-        <span>Steps: ${r.steps_taken}</span>
-        <span>Duration: ${r.duration_seconds.toFixed(1)}s</span>
-        <span>Errors: ${r.errors_encountered}</span>
-        <span>Overall: <span class="score-bar-value" data-target-value="${(r.scores.overall * 100).toFixed(0)}">0%</span></span>
-      </div>
-      ${renderScoreBars(r.scores)}
-    </div>
-  `).join('');
+function startPolling() {
+  if (pollInterval) return;
+  pollInterval = setInterval(pollJobs, 3000);
+}
 
-  const resultsDiv = document.getElementById('run-results');
-  resultsDiv.classList.remove('hidden');
+function stopPolling() {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+}
 
-  // Animate result cards
-  animateScaleIn('#results-list .result-card');
-  // Animate score bars
-  setTimeout(() => animateScoreBars(container), 200);
+async function pollJobs() {
+  const running = [...activeJobs.entries()].filter(([, j]) => j.status === 'running');
+  if (!running.length) { stopPolling(); return; }
+
+  for (const [jobId] of running) {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      const job = await res.json();
+      activeJobs.set(jobId, job);
+    } catch { /* ignore poll errors */ }
+  }
+  renderJobsQueue();
+}
+
+function renderJobsQueue() {
+  const container = document.getElementById('jobs-queue');
+  if (!activeJobs.size) { container.innerHTML = ''; return; }
+
+  const cards = [...activeJobs.entries()].reverse().map(([jobId, job]) => {
+    const isRunning = job.status === 'running';
+    const host = (() => { try { return new URL(job.url).hostname; } catch { return job.url; } })();
+    const taskCount = (job.tasks || []).length;
+    const doneCount = (job.results || []).length;
+
+    let statusHtml;
+    if (isRunning) {
+      const progress = taskCount > 0 ? `Task ${Math.min(doneCount + 1, taskCount)} of ${taskCount}` : 'Starting...';
+      statusHtml = `
+        <div class="job-status-row">
+          <div class="loading-spinner-sm"></div>
+          <span class="job-progress">${progress}</span>
+        </div>`;
+    } else {
+      statusHtml = '';
+    }
+
+    const resultsHtml = (job.results || []).map(r => `
+      <div class="result-card">
+        <div class="result-header">
+          <span class="result-task">${esc(r.task)}</span>
+          <span class="badge ${r.found ? 'badge-success' : 'badge-error'}">
+            ${r.found ? 'Found' : 'Not Found'}
+          </span>
+        </div>
+        ${r.answer ? `<div class="result-answer">${esc(r.answer)}</div>` : ''}
+        ${r.error ? `<div class="result-answer" style="color: var(--danger)">${esc(r.error)}</div>` : ''}
+        <div class="result-meta">
+          <span>Steps: ${r.steps_taken}</span>
+          <span>Duration: ${r.duration_seconds.toFixed(1)}s</span>
+          <span>Errors: ${r.errors_encountered}</span>
+          <span>Overall: ${r.scores ? (r.scores.overall * 100).toFixed(0) + '%' : '-'}</span>
+        </div>
+        ${r.scores ? renderScoreBars(r.scores) : ''}
+      </div>
+    `).join('');
+
+    return `
+      <div class="card job-card" data-job-id="${jobId}">
+        <div class="job-header">
+          <div class="job-title">
+            <span class="badge ${isRunning ? 'badge-running' : 'badge-success'}">${isRunning ? 'Running' : 'Done'}</span>
+            <span class="job-url">${esc(host)}</span>
+            <span class="job-task-count">${taskCount} task${taskCount !== 1 ? 's' : ''}</span>
+          </div>
+          <button class="btn-icon job-dismiss" onclick="dismissJob('${jobId}')" title="Dismiss">&times;</button>
+        </div>
+        ${statusHtml}
+        ${resultsHtml}
+      </div>`;
+  }).join('');
+
+  const prevIds = new Set(container.querySelectorAll('.job-card').length ? [...container.querySelectorAll('.job-card')].map(el => el.dataset.jobId) : []);
+  container.innerHTML = cards;
+
+  // Animate new cards
+  container.querySelectorAll('.job-card').forEach(card => {
+    if (!prevIds.has(card.dataset.jobId)) {
+      animate(card, { opacity: [0, 1], translateY: [15, 0], duration: 400, ease: 'outQuad' });
+    }
+  });
+
+  // Animate score bars and value counters in completed results
+  container.querySelectorAll('.result-card').forEach(card => {
+    animateScoreBars(card);
+  });
+}
+
+function dismissJob(jobId) {
+  const card = document.querySelector(`.job-card[data-job-id="${jobId}"]`);
+  if (card) {
+    animate(card, {
+      opacity: [1, 0], translateX: [0, 30], duration: 250, ease: 'inQuad',
+      onComplete: () => { activeJobs.delete(jobId); renderJobsQueue(); },
+    });
+  } else {
+    activeJobs.delete(jobId);
+    renderJobsQueue();
+  }
 }
 
 function renderScoreBars(scores) {
@@ -220,6 +297,7 @@ async function loadDashboard() {
   const urls = await urlsRes.json();
 
   renderStatCards(stats);
+  renderInsights(stats.top_issues || [], stats.recommendations || []);
   renderRadarChart(stats.avg_scores);
   renderTrendChart(history);
   populateUrlDropdown(urls);
@@ -245,6 +323,41 @@ function renderStatCards(stats) {
   animateScaleIn('#stats-grid .stat-card');
   // Animate counter values
   setTimeout(() => animateStatValues(grid), 100);
+}
+
+function renderInsights(issues, recommendations) {
+  const issuesEl = document.getElementById('top-issues');
+  if (!issues.length) {
+    issuesEl.innerHTML = '<div class="empty-state">No issues detected yet</div>';
+  } else {
+    issuesEl.innerHTML = issues.map(issue => {
+      const severityClass = issue.severity === 'high' ? 'severity-high' : issue.severity === 'medium' ? 'severity-medium' : 'severity-low';
+      return `
+        <div class="issue-item ${severityClass}">
+          <div class="issue-header">
+            <span class="issue-severity">${issue.severity.toUpperCase()}</span>
+            <span class="issue-category">${esc(issue.category)}</span>
+          </div>
+          <div class="issue-title">${esc(issue.title)}</div>
+          <div class="issue-detail">${esc(issue.detail)}</div>
+        </div>`;
+    }).join('');
+  }
+
+  const recsEl = document.getElementById('recommendations');
+  if (!recommendations.length) {
+    recsEl.innerHTML = '<div class="empty-state">Run more tasks to get recommendations</div>';
+  } else {
+    recsEl.innerHTML = recommendations.map(rec => `
+      <div class="rec-item">
+        <span class="rec-marker">&rsaquo;</span>
+        <span>${esc(rec)}</span>
+      </div>
+    `).join('');
+  }
+
+  animateFadeUp('.issue-item', 100);
+  animateFadeUp('.rec-item', 200);
 }
 
 function renderRadarChart(avgScores) {
@@ -457,21 +570,30 @@ function renderUrlPerformance(data) {
 // ── History ──
 let allHistory = [];
 
-async function loadHistory(filterUrl) {
-  const params = new URLSearchParams({ limit: '100' });
-  if (filterUrl) params.set('url', filterUrl);
-  const res = await fetch(`/api/results?${params}`);
+async function loadHistory() {
+  const res = await fetch('/api/results?limit=200');
   allHistory = await res.json();
-  renderHistory(allHistory);
+  applyHistoryFilter();
 }
 
-document.getElementById('filter-btn').addEventListener('click', () => {
-  const url = document.getElementById('filter-url').value.trim();
-  loadHistory(url || undefined);
-});
+function applyHistoryFilter() {
+  const query = document.getElementById('filter-url').value.trim().toLowerCase();
+  if (!query) {
+    renderHistory(allHistory);
+    return;
+  }
+  const filtered = allHistory.filter(r =>
+    r.url.toLowerCase().includes(query) || r.task.toLowerCase().includes(query)
+  );
+  renderHistory(filtered);
+}
+
+document.getElementById('filter-btn').addEventListener('click', applyHistoryFilter);
+
+document.getElementById('filter-url').addEventListener('input', applyHistoryFilter);
 
 document.getElementById('filter-url').addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('filter-btn').click();
+  if (e.key === 'Enter') applyHistoryFilter();
 });
 
 function renderHistory(rows) {

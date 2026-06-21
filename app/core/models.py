@@ -1,9 +1,21 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, field_validator
 
 
 class TaskRequest(BaseModel):
     url: HttpUrl
     tasks: list[str]
+
+    @field_validator("tasks")
+    @classmethod
+    def validate_tasks(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("At least one task is required")
+        if len(v) > 10:
+            raise ValueError("Maximum 10 tasks per request")
+        for task in v:
+            if not task.strip():
+                raise ValueError("Task cannot be empty")
+        return [t.strip() for t in v]
 
 
 class ScoreBreakdown(BaseModel):

@@ -113,6 +113,41 @@ GET /api/results?url=https://www.netflix.com/&limit=10
 
 Health check endpoint.
 
+## Scoring
+
+Each agent run is evaluated across five dimensions (0.0–1.0), combined into a weighted overall score:
+
+| Dimension | Weight | Description |
+|---|---|---|
+| **Completeness** | 30% | Was the information found? Binary: 1.0 if found, 0.0 otherwise. |
+| **Confidence** | 25% | Agent's self-reported confidence in its answer (0.0–1.0). |
+| **Efficiency** | 15% | Fewer steps = better. 1 step = 1.0, scales linearly to 0.0 at max steps. |
+| **Speed** | 10% | Under 60s = 1.0, scales linearly to 0.0 at 300s (5x baseline). |
+| **Reliability** | 20% | No errors = 1.0, each code execution error reduces by 0.25. |
+
+**Overall Score** = weighted average of all five dimensions.
+
+The confidence score is self-reported by the LLM — the agent is prompted to rate its certainty from 0.0–1.0 based on how clearly the information was visible on the page.
+
+### Dashboard Insights
+
+The dashboard automatically analyzes run data to surface:
+
+- **Top Issues Identified**: Key friction points like high failure rates, low confidence, excessive steps, slow runs, or frequent code errors — ranked by severity (high/medium/low).
+- **Recommendations for Improvement**: Actionable suggestions based on the identified issues, such as improving task prompts, testing on simpler pages first, or addressing agent-unfriendly page patterns (login walls, CAPTCHAs, infinite scroll).
+- **Per-URL Performance**: Select any tested URL to see its score breakdown, radar chart, and individual run details with expandable step-by-step agent reasoning.
+
+### Step-Level Traceability
+
+Each run stores per-step details: the agent's reasoning, the code it executed, its observations, and any errors. This enables debugging why a particular run failed or scored low.
+
+## Concurrency & Safety
+
+- **Browser lock**: Only one agent task runs at a time. Concurrent requests queue with a 5-minute timeout to prevent resource conflicts on the shared headless Chrome instance.
+- **Request validation**: Maximum 10 tasks per request, no empty tasks allowed.
+- **Timeout**: Agent tasks are bounded by `AGENT_MAX_STEPS` (default 20) and a 300-second wall-clock limit.
+- **Browser crash recovery**: The browser is always killed in a `finally` block, with exception handling to prevent cleanup failures from propagating.
+
 ## Testing
 
 ```bash

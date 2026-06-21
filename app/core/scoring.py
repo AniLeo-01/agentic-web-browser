@@ -6,7 +6,7 @@ Five dimensions, each 0.0–1.0:
   - Confidence: How confident is the agent in its answer?
   - Efficiency: How few steps did it take relative to the max?
   - Speed: How fast was the run relative to a baseline?
-  - Reliability: Did it complete without code execution errors?
+  - Reliability: Did it complete successfully without errors?
 
 Overall score is a weighted average of these dimensions.
 """
@@ -47,8 +47,11 @@ def compute_scores(
     else:
         speed = max(0.0, 1.0 - (duration_seconds - SPEED_BASELINE_SECONDS) / (4 * SPEED_BASELINE_SECONDS))
 
-    # No errors = 1.0, each error reduces by 0.25
+    # Base reliability from code errors: each error reduces by 0.25
     reliability = max(0.0, 1.0 - errors_encountered * 0.25)
+    # If the task failed (not found), cap reliability at 0.5
+    if not found:
+        reliability = min(reliability, 0.5)
 
     scores = {
         "completeness": round(completeness, 3),

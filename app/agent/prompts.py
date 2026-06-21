@@ -40,7 +40,14 @@ When you have your answer, return it with final_answer("YOUR ANSWER").
 
 TASK_PROMPT_TEMPLATE = (
     "Navigate to {url} and complete this task: {task}\n\n"
-    "When you find the answer, return it with final_answer(). "
-    "If you cannot find the information, return final_answer('NOT_FOUND: <reason>').\n\n"
+    "When you find the answer, rate your confidence from 0.0 to 1.0 based on how certain you are "
+    "the information is correct and complete, then return:\n"
+    "  final_answer('CONFIDENCE: <number>\\n<your answer>')\n\n"
+    "Confidence guidelines:\n"
+    "- 0.9-1.0: Information clearly visible on the page, directly matches the task\n"
+    "- 0.7-0.8: Information found but may be incomplete or partially inferred\n"
+    "- 0.4-0.6: Information is ambiguous, possibly outdated, or required guessing\n"
+    "- 0.1-0.3: Very uncertain, could not verify the information\n\n"
+    "If you cannot find the information at all, return final_answer('NOT_FOUND: <reason>').\n\n"
     "{helium_instructions}"
 )

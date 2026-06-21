@@ -19,7 +19,12 @@ def search_item_ctrl_f(text: str, nth_result: int = 1) -> str:
     import helium
 
     driver = helium.get_driver()
-    elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{text}')]")
+    # Escape single quotes in text to prevent XPath injection
+    if "'" in text:
+        escaped = "concat('" + text.replace("'", "',\"'\",'") + "')"
+    else:
+        escaped = f"'{text}'"
+    elements = driver.find_elements(By.XPATH, f"//*[contains(text(), {escaped})]")
     if nth_result > len(elements):
         raise Exception(f"Match n°{nth_result} not found (only {len(elements)} matches found)")
     result = f"Found {len(elements)} matches for '{text}'."

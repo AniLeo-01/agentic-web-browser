@@ -138,6 +138,10 @@ def get_dashboard_stats() -> dict:
     url_columns = [desc[0] for desc in by_url.description]
     url_stats = [dict(zip(url_columns, row)) for row in by_url.fetchall()]
 
+    # Identify top issues from failed runs and low-scoring dimensions
+    issues = _identify_issues(conn, summary)
+    recommendations = _generate_recommendations(summary, issues)
+
     return {
         "total_runs": summary[0],
         "successful_runs": summary[1],
@@ -152,7 +156,144 @@ def get_dashboard_stats() -> dict:
         "avg_duration": round(summary[8] or 0, 2),
         "avg_steps": round(summary[9] or 0, 1),
         "by_url": url_stats,
+        "top_issues": issues,
+        "recommendations": recommendations,
     }
+
+
+def _identify_issues(conn: duckdb.DuckDBPyConnection, summary: tuple) -> list[dict]:
+    """Analyze runs to identify top friction points."""
+    issues = []
+    total = summary[0] or 0
+    if total == 0:
+        return issues
+
+    success_rate = (summary[1] or 0) / total
+    avg_completeness = summary[3] or 0
+    avg_confidence = summary[4] or 0
+    avg_efficiency = summary[5] or 0
+    avg_speed = summary[6] or 0
+    avg_reliability = summary[7] or 0
+
+    # High failure rate
+    if success_rate < 0.7:
+        issues.append({
+            "severity": "high",
+            "category": "Completeness",
+            "title": "High failure rate",
+            "detail": f"{(1 - success_rate) * 100:.0f}% of runs failed to find the requested information",
+        })
+
+    # Low confidence
+    if avg_confidence < 0.6:
+        issues.append({
+            "severity": "high",
+            "category": "Confidence",
+            "title": "Low agent confidence",
+            "detail": f"Average confidence is {avg_confidence:.0%} — the agent is uncertain about its answers",
+        })
+
+    # Poor efficiency (too many steps)
+    if avg_efficiency < 0.5:
+        issues.append({
+            "severity": "medium",
+            "category": "Efficiency",
+            "title": "Excessive navigation steps",
+            "detail": f"Efficiency score is {avg_efficiency:.0%} — the agent takes too many steps to find information",
+        })
+
+    # Slow runs
+    if avg_speed < 0.5:
+        issues.append({
+            "severity": "medium",
+            "category": "Speed",
+            "title": "Slow task completion",
+            "detail": f"Speed score is {avg_speed:.0%} — runs are taking longer than the 60s baseline",
+        })
+
+    # Reliability problems (code errors)
+    if avg_reliability < 0.7:
+        issues.append({
+            "severity": "high",
+            "category": "Reliability",
+            "title": "Frequent code execution errors",
+            "detail": f"Reliability score is {avg_reliability:.0%} — the agent encounters errors during browsing",
+        })
+
+    # Find URLs with worst performance
+    worst = conn.execute("""
+        SELECT url, AVG(score_overall) as avg_score,
+               SUM(CASE WHEN NOT found THEN 1 ELSE 0 END) as failures,
+               COUNT(*) as runs
+        FROM browse_results
+        GROUP BY url
+        HAVING COUNT(*) >= 1 AND AVG(score_overall) < 0.5
+        ORDER BY avg_score ASC
+        LIMIT 3
+    """).fetchall()
+    for row in worst:
+        issues.append({
+            "severity": "medium",
+            "category": "URL-specific",
+            "title": f"Poor performance on {row[0][:50]}",
+            "detail": f"Average score {row[1]:.0%} across {row[3]} run(s), {row[2]} failure(s)",
+        })
+
+    # Sort by severity
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    issues.sort(key=lambda x: severity_order.get(x["severity"], 99))
+
+    return issues[:5]
+
+
+def _generate_recommendations(summary: tuple, issues: list[dict]) -> list[str]:
+    """Generate actionable recommendations based on identified issues."""
+    recs = []
+    if not summary or (summary[0] or 0) == 0:
+        return ["Run some agent tasks to start collecting performance data"]
+
+    categories = {i["category"] for i in issues}
+
+    if "Completeness" in categories:
+        recs.append(
+            "Improve task prompts with more specific instructions — "
+            "vague tasks like 'find info' lead to higher failure rates"
+        )
+
+    if "Confidence" in categories:
+        recs.append(
+            "Websites with heavy JavaScript rendering or dynamic content may "
+            "reduce agent confidence — consider testing on pages with static content first"
+        )
+
+    if "Efficiency" in categories:
+        recs.append(
+            "The agent is taking many steps to navigate — sites with clear navigation "
+            "structure and descriptive link text improve efficiency"
+        )
+
+    if "Speed" in categories:
+        recs.append(
+            "Long run times may indicate complex page structures or slow model responses — "
+            "consider reducing max_steps or using a faster model endpoint"
+        )
+
+    if "Reliability" in categories:
+        recs.append(
+            "Code execution errors often stem from pop-ups, cookie banners, or "
+            "dynamic elements — sites should have dismissible overlays and standard HTML structure"
+        )
+
+    if "URL-specific" in categories:
+        recs.append(
+            "Some URLs consistently score low — review their page structure for "
+            "agent-unfriendly patterns like login walls, CAPTCHAs, or infinite scroll"
+        )
+
+    if not recs:
+        recs.append("Overall performance looks good — keep testing across diverse URLs to build a comprehensive profile")
+
+    return recs
 
 
 def get_url_performance(url: str) -> dict:

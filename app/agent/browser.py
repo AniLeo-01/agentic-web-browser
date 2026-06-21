@@ -1,3 +1,5 @@
+import re
+import threading
 import time
 from io import BytesIO
 from time import sleep
@@ -14,6 +16,12 @@ from app.agent.prompts import HELIUM_INSTRUCTIONS, TASK_PROMPT_TEMPLATE
 from app.agent.tools import close_popups, go_back, search_item_ctrl_f
 from app.core.config import settings
 from app.core.scoring import compute_scores
+
+# Serialize browser access — only one agent run at a time
+_browser_lock = threading.Lock()
+
+# Maximum wall-clock time (seconds) for a single agent task
+TASK_TIMEOUT_SECONDS = 300
 
 
 def _save_screenshot(memory_step: ActionStep, agent: CodeAgent) -> None:
@@ -85,16 +93,44 @@ def _extract_step_details(agent: CodeAgent) -> list[dict]:
     return steps
 
 
+def _parse_confidence(answer: str) -> tuple[float, str]:
+    """Parse 'CONFIDENCE: X.X\\n<answer>' format. Returns (confidence, clean_answer)."""
+    match = re.match(r"CONFIDENCE:\s*([\d.]+)\s*\n(.*)", answer, re.DOTALL)
+    if match:
+        try:
+            conf = max(0.0, min(1.0, float(match.group(1))))
+            return conf, match.group(2).strip()
+        except ValueError:
+            pass
+    # Fallback: no confidence marker found, default to 0.7
+    return 0.7, answer
+
+
 def _run_agent_task_sync(url: str, task: str) -> dict:
     """
     Synchronous agent execution. Called in a background thread.
+    Acquires a lock to prevent concurrent browser access.
 
     Returns a dict with keys: found, confidence, answer, error,
     steps_taken, duration_seconds, errors_encountered, scores.
     """
-    driver = _create_driver()
+    acquired = _browser_lock.acquire(timeout=TASK_TIMEOUT_SECONDS)
+    if not acquired:
+        scores = compute_scores(
+            found=False, confidence=0.0, steps_taken=0,
+            max_steps=settings.agent_max_steps,
+            duration_seconds=0.0, errors_encountered=1,
+        )
+        return {
+            "found": False, "confidence": 0.0, "answer": None,
+            "error": "Timed out waiting for browser lock — another task is running",
+            "steps_taken": 0, "duration_seconds": 0.0,
+            "errors_encountered": 1, "scores": scores, "step_details": [],
+        }
+
     start_time = time.monotonic()
     try:
+        _create_driver()
         model = OpenAIModel(
             model_id=settings.model_id,
             api_base=settings.model_base_url,
@@ -129,8 +165,7 @@ def _run_agent_task_sync(url: str, task: str) -> dict:
             error_msg = answer.removeprefix("NOT_FOUND:").strip()
         else:
             found = True
-            confidence = 0.8
-            final_answer = answer
+            confidence, final_answer = _parse_confidence(answer)
             error_msg = None
 
         scores = compute_scores(
@@ -175,7 +210,11 @@ def _run_agent_task_sync(url: str, task: str) -> dict:
             "step_details": [],
         }
     finally:
-        helium.kill_browser()
+        try:
+            helium.kill_browser()
+        except Exception:
+            pass
+        _browser_lock.release()
 
 
 async def run_agent_task(url: str, task: str) -> dict:

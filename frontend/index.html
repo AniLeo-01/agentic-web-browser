@@ -42,20 +42,23 @@
         </form>
       </div>
 
-      <div id="run-status" class="card hidden">
-        <div class="loading-spinner"></div>
-        <p>Agent is browsing... This may take a minute.</p>
-      </div>
-
-      <div id="run-results" class="card hidden">
-        <h2>Results</h2>
-        <div id="results-list"></div>
-      </div>
+      <div id="jobs-queue"></div>
     </section>
 
     <!-- Dashboard Tab -->
     <section id="tab-dashboard" class="tab-content">
       <div class="stats-grid" id="stats-grid"></div>
+
+      <div class="insights-row">
+        <div class="card insights-card">
+          <h3>Top Issues Identified</h3>
+          <div id="top-issues"></div>
+        </div>
+        <div class="card insights-card">
+          <h3>Recommendations</h3>
+          <div id="recommendations"></div>
+        </div>
+      </div>
 
       <div class="charts-row">
         <div class="card chart-card">

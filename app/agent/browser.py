@@ -1,3 +1,4 @@
+import time
 from io import BytesIO
 from time import sleep
 
@@ -12,6 +13,7 @@ from smolagents.agents import ActionStep
 from app.agent.prompts import HELIUM_INSTRUCTIONS, TASK_PROMPT_TEMPLATE
 from app.agent.tools import close_popups, go_back, search_item_ctrl_f
 from app.core.config import settings
+from app.core.scoring import compute_scores
 
 
 def _save_screenshot(memory_step: ActionStep, agent: CodeAgent) -> None:
@@ -53,13 +55,45 @@ def _create_driver() -> webdriver.Chrome:
     return helium.start_chrome(headless=True, options=chrome_options)
 
 
+def _count_errors(agent: CodeAgent) -> int:
+    """Count steps that had code execution errors."""
+    count = 0
+    for step in agent.memory.steps:
+        if isinstance(step, ActionStep) and step.error is not None:
+            count += 1
+    return count
+
+
+def _count_steps(agent: CodeAgent) -> int:
+    """Count action steps taken."""
+    return sum(1 for s in agent.memory.steps if isinstance(s, ActionStep))
+
+
+def _extract_step_details(agent: CodeAgent) -> list[dict]:
+    """Extract reasoning, code, observations, and errors from each step."""
+    steps = []
+    for step in agent.memory.steps:
+        if not isinstance(step, ActionStep):
+            continue
+        steps.append({
+            "step": step.step_number,
+            "reasoning": step.model_output if isinstance(step.model_output, str) else None,
+            "code": step.code_action,
+            "observations": step.observations,
+            "error": str(step.error) if step.error else None,
+        })
+    return steps
+
+
 def _run_agent_task_sync(url: str, task: str) -> dict:
     """
     Synchronous agent execution. Called in a background thread.
 
-    Returns a dict with keys: found, confidence, answer, error.
+    Returns a dict with keys: found, confidence, answer, error,
+    steps_taken, duration_seconds, errors_encountered, scores.
     """
     driver = _create_driver()
+    start_time = time.monotonic()
     try:
         model = OpenAIModel(
             model_id=settings.model_id,
@@ -82,28 +116,63 @@ def _run_agent_task_sync(url: str, task: str) -> dict:
         )
 
         result = agent.run(prompt)
+        duration = time.monotonic() - start_time
         answer = str(result)
+        steps_taken = _count_steps(agent)
+        errors_encountered = _count_errors(agent)
+        step_details = _extract_step_details(agent)
 
         if answer.startswith("NOT_FOUND:"):
-            return {
-                "found": False,
-                "confidence": 0.0,
-                "answer": None,
-                "error": answer.removeprefix("NOT_FOUND:").strip(),
-            }
+            found = False
+            confidence = 0.0
+            final_answer = None
+            error_msg = answer.removeprefix("NOT_FOUND:").strip()
+        else:
+            found = True
+            confidence = 0.8
+            final_answer = answer
+            error_msg = None
+
+        scores = compute_scores(
+            found=found,
+            confidence=confidence,
+            steps_taken=steps_taken,
+            max_steps=settings.agent_max_steps,
+            duration_seconds=duration,
+            errors_encountered=errors_encountered,
+        )
 
         return {
-            "found": True,
-            "confidence": 0.8,
-            "answer": answer,
-            "error": None,
+            "found": found,
+            "confidence": confidence,
+            "answer": final_answer,
+            "error": error_msg,
+            "steps_taken": steps_taken,
+            "duration_seconds": round(duration, 2),
+            "errors_encountered": errors_encountered,
+            "scores": scores,
+            "step_details": step_details,
         }
     except Exception as e:
+        duration = time.monotonic() - start_time
+        scores = compute_scores(
+            found=False,
+            confidence=0.0,
+            steps_taken=0,
+            max_steps=settings.agent_max_steps,
+            duration_seconds=duration,
+            errors_encountered=1,
+        )
         return {
             "found": False,
             "confidence": 0.0,
             "answer": None,
             "error": str(e),
+            "steps_taken": 0,
+            "duration_seconds": round(duration, 2),
+            "errors_encountered": 1,
+            "scores": scores,
+            "step_details": [],
         }
     finally:
         helium.kill_browser()

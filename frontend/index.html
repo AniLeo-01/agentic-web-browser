@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic Web Browser</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/animejs/dist/bundles/anime.umd.min.js"></script>
+</head>
+<body>
+  <nav>
+    <div class="nav-brand">Agentic Web Browser</div>
+    <div class="nav-tabs">
+      <button class="tab active" data-tab="run">New Run</button>
+      <button class="tab" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="history">History</button>
+    </div>
+  </nav>
+
+  <main>
+    <!-- Run Tab -->
+    <section id="tab-run" class="tab-content active">
+      <div class="card">
+        <h2>Browse a Website</h2>
+        <form id="browse-form">
+          <div class="form-group">
+            <label for="url">Website URL</label>
+            <input type="url" id="url" placeholder="https://www.example.com" required>
+          </div>
+          <div class="form-group">
+            <label>Tasks</label>
+            <div id="tasks-container">
+              <div class="task-row">
+                <input type="text" class="task-input" placeholder="e.g. Find pricing information" required>
+                <button type="button" class="btn-icon remove-task" title="Remove">&times;</button>
+              </div>
+            </div>
+            <button type="button" id="add-task" class="btn-secondary">+ Add Task</button>
+          </div>
+          <button type="submit" id="submit-btn" class="btn-primary">Run Agent</button>
+        </form>
+      </div>
+
+      <div id="run-status" class="card hidden">
+        <div class="loading-spinner"></div>
+        <p>Agent is browsing... This may take a minute.</p>
+      </div>
+
+      <div id="run-results" class="card hidden">
+        <h2>Results</h2>
+        <div id="results-list"></div>
+      </div>
+    </section>
+
+    <!-- Dashboard Tab -->
+    <section id="tab-dashboard" class="tab-content">
+      <div class="stats-grid" id="stats-grid"></div>
+
+      <div class="charts-row">
+        <div class="card chart-card">
+          <h3>Score Breakdown (All Runs)</h3>
+          <canvas id="radar-chart"></canvas>
+        </div>
+        <div class="card chart-card">
+          <h3>Score Trends (All Runs)</h3>
+          <canvas id="trend-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="perf-header">
+          <h3>Performance by URL</h3>
+          <select id="url-select">
+            <option value="">Select a URL...</option>
+          </select>
+        </div>
+        <div id="url-perf-empty" class="empty-state">Select a URL to view its score breakdown</div>
+        <div id="url-perf-content" class="hidden">
+          <canvas id="url-radar-chart"></canvas>
+          <h4 class="url-runs-heading">Run Details</h4>
+          <div id="url-runs-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- History Tab -->
+    <section id="tab-history" class="tab-content">
+      <div class="card">
+        <div class="history-header">
+          <h2>Run History</h2>
+          <div class="filter-group">
+            <input type="text" id="filter-url" placeholder="Filter by URL...">
+            <button id="filter-btn" class="btn-secondary">Filter</button>
+          </div>
+        </div>
+        <div id="history-table-container">
+          <table id="history-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>URL</th>
+                <th>Task</th>
+                <th>Status</th>
+                <th>Score</th>
+                <th>Steps</th>
+                <th>Duration</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Detail Modal -->
+  <div id="detail-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content card">
+      <div class="modal-header">
+        <h3>Run Details</h3>
+        <button class="btn-icon modal-close">&times;</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

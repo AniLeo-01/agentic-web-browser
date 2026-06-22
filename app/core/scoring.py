@@ -49,8 +49,11 @@ def compute_scores(
 
     # Base reliability from code errors: each error reduces by 0.25
     reliability = max(0.0, 1.0 - errors_encountered * 0.25)
-    # If the task failed (not found), cap reliability at 0.5
-    if not found:
+    if found:
+        # Self-correction bonus: errors hurt half as much if the agent recovered
+        reliability = max(0.0, 1.0 - errors_encountered * 0.125)
+    else:
+        # Cap reliability at 0.5 if the task failed
         reliability = min(reliability, 0.5)
 
     scores = {

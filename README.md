@@ -206,7 +206,7 @@ Each agent run produces an **Agent Readiness Score** — a composite metric refl
 | **Confidence** | 25% | The agent's self-reported certainty (0.0–1.0), clamped to that range. |
 | **Efficiency** | 15% | `1.0 - (steps_taken - 1) / (max_steps - 1)`. 1 step = perfect, max steps = 0. |
 | **Speed** | 10% | `1.0` if under 60s. Above 60s, scales linearly to `0.0` at 300s. |
-| **Reliability** | 20% | `1.0 - (errors * 0.25)`. Each code execution error costs 0.25. Capped at 0.5 if the task failed. |
+| **Reliability** | 20% | If found: `1.0 - (errors * 0.125)` (self-correction bonus). If not found: `1.0 - (errors * 0.25)`, capped at 0.5. |
 
 **Overall Score** = `0.30 * completeness + 0.25 * confidence + 0.20 * reliability + 0.15 * efficiency + 0.10 * speed`
 

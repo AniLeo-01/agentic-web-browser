@@ -1,3 +1,5 @@
+import threading
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -6,6 +8,18 @@ from selenium.common.exceptions import ElementNotInteractableException, TimeoutE
 from selenium import webdriver
 
 from smolagents import tool
+
+# Shared thread-local storage with browser.py
+_thread_local = threading.local()
+
+
+def _get_driver():
+    """Get the driver for the current thread, falling back to helium's global."""
+    driver = getattr(_thread_local, "driver", None)
+    if driver is not None:
+        return driver
+    import helium
+    return helium.get_driver()
 
 
 @tool
@@ -16,9 +30,7 @@ def search_item_ctrl_f(text: str, nth_result: int = 1) -> str:
         text: The text to search for
         nth_result: Which occurrence to jump to (default: 1)
     """
-    import helium
-
-    driver = helium.get_driver()
+    driver = _get_driver()
     # Escape single quotes in text to prevent XPath injection
     if "'" in text:
         escaped = "concat('" + text.replace("'", "',\"'\",'") + "')"
@@ -35,11 +47,32 @@ def search_item_ctrl_f(text: str, nth_result: int = 1) -> str:
 
 
 @tool
+def query_elements(selector: str, limit: int = 20) -> str:
+    """
+    Finds all elements matching a CSS selector and returns their text content.
+    Use this to extract lists of items (comments, prices, product names, etc.).
+    Args:
+        selector: CSS selector string (e.g. '.price', '#comments .text', 'h2')
+        limit: Maximum number of elements to return (default: 20)
+    """
+    driver = _get_driver()
+    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+    if not elements:
+        return f"No elements found matching '{selector}'"
+    texts = []
+    for i, el in enumerate(elements[:limit]):
+        text = el.text.strip()
+        if text:
+            texts.append(f"{i + 1}. {text}")
+    if not texts:
+        return f"Found {len(elements)} elements matching '{selector}' but none had visible text"
+    return f"Found {len(elements)} elements matching '{selector}':\n" + "\n".join(texts)
+
+
+@tool
 def go_back() -> None:
     """Goes back to the previous page."""
-    import helium
-
-    driver = helium.get_driver()
+    driver = _get_driver()
     driver.back()
 
 
@@ -49,9 +82,7 @@ def close_popups() -> str:
     Closes any visible modal or pop-up on the page. Use this to dismiss pop-up windows.
     This does not work on cookie consent banners.
     """
-    import helium
-
-    driver = helium.get_driver()
+    driver = _get_driver()
     modal_selectors = [
         "button[class*='close']",
         "[class*='modal'] button",

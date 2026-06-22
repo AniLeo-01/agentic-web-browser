@@ -190,7 +190,7 @@ function renderJobsQueue() {
 
     let statusHtml;
     if (isRunning) {
-      const progress = taskCount > 0 ? `Task ${Math.min(doneCount + 1, taskCount)} of ${taskCount}` : 'Starting...';
+      const progress = taskCount > 0 ? `${doneCount} of ${taskCount} tasks done` : 'Starting...';
       statusHtml = `
         <div class="job-status-row">
           <div class="loading-spinner-sm"></div>

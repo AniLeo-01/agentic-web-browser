@@ -1,3 +1,5 @@
+"""Modal deployment for Agentic Web Browser."""
+
 import modal
 
 image = (

@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install modal
-      - run: modal deploy modal/deploy.py
+      - run: modal deploy modal/api_deploy.py
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

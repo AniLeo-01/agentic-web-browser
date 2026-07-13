@@ -10,6 +10,8 @@ from app.core.config import settings
 from app.core.db import close_connection, get_connection
 
 STATIC_DIR = Path(__file__).parent.parent / "frontend"
+MEDIA_DIR = Path(settings.media_path)
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -21,6 +23,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.include_router(router, prefix="/api")
+app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

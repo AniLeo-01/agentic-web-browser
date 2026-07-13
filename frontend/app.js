@@ -1,4 +1,15 @@
 const { animate, stagger } = anime;
+const chartTheme = {
+  accent: '#412CFF',
+  accentFill: 'rgba(65, 44, 255, 0.10)',
+  grid: 'rgba(34, 35, 49, 0.08)',
+  text: '#222331',
+  muted: '#747684',
+  success: '#12815f',
+  warning: '#a86f00',
+  danger: '#d94b74',
+  font: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+};
 
 // ── Animation Helpers ──
 function animateFadeUp(selector, delay = 0) {
@@ -125,6 +136,7 @@ tasksContainer.addEventListener('click', e => {
 // ── Job Queue ──
 const activeJobs = new Map(); // job_id -> { url, tasks, status }
 let pollInterval = null;
+let currentPollMs = 3000;
 
 document.getElementById('browse-form').addEventListener('submit', async e => {
   e.preventDefault();
@@ -154,7 +166,8 @@ document.getElementById('browse-form').addEventListener('submit', async e => {
 
 function startPolling() {
   if (pollInterval) return;
-  pollInterval = setInterval(pollJobs, 3000);
+  currentPollMs = 3000;
+  pollInterval = setInterval(pollJobs, currentPollMs);
 }
 
 function stopPolling() {
@@ -168,25 +181,63 @@ async function pollJobs() {
   const running = [...activeJobs.entries()].filter(([, j]) => j.status === 'running');
   if (!running.length) { stopPolling(); return; }
 
+  let hasPending = false;
   for (const [jobId] of running) {
     try {
       const res = await fetch(`/api/jobs/${jobId}`);
       const job = await res.json();
       activeJobs.set(jobId, job);
+      if (job.pending_inputs && job.pending_inputs.length > 0) hasPending = true;
     } catch { /* ignore poll errors */ }
   }
   renderJobsQueue();
+
+  // Poll faster when there are pending HITL inputs
+  const newInterval = hasPending ? 1500 : 3000;
+  if (pollInterval && currentPollMs !== newInterval) {
+    clearInterval(pollInterval);
+    currentPollMs = newInterval;
+    pollInterval = setInterval(pollJobs, currentPollMs);
+  }
 }
 
 function renderJobsQueue() {
   const container = document.getElementById('jobs-queue');
   if (!activeJobs.size) { container.innerHTML = ''; return; }
 
+  // Preserve HITL input values and focus state before re-render
+  const hitlValues = {};
+  let focusedTaskId = null;
+  container.querySelectorAll('.hitl-prompt').forEach(el => {
+    const tid = el.dataset.taskId;
+    const input = el.querySelector('.hitl-input');
+    if (input) {
+      hitlValues[tid] = input.value;
+      if (document.activeElement === input) focusedTaskId = tid;
+    }
+  });
+
   const cards = [...activeJobs.entries()].reverse().map(([jobId, job]) => {
     const isRunning = job.status === 'running';
     const host = (() => { try { return new URL(job.url).hostname; } catch { return job.url; } })();
     const taskCount = (job.tasks || []).length;
     const doneCount = (job.results || []).length;
+
+    // HITL: pending input prompts
+    const pendingInputs = job.pending_inputs || [];
+    const hitlHtml = pendingInputs.map(p => `
+      <div class="hitl-prompt" data-task-id="${p.task_id}" data-job-id="${jobId}">
+        <div class="hitl-header">
+          <span class="hitl-icon">&#9888;</span>
+          <span class="hitl-label">Input needed for: ${esc(p.task)}</span>
+        </div>
+        <div class="hitl-question">${esc(p.question)}</div>
+        <div class="hitl-input-row">
+          <input type="text" class="hitl-input" placeholder="Type your response..." autocomplete="off">
+          <button class="btn-primary hitl-submit" onclick="submitHitlResponse('${jobId}', '${p.task_id}', this)">Send</button>
+        </div>
+      </div>
+    `).join('');
 
     let statusHtml;
     if (isRunning) {
@@ -195,7 +246,8 @@ function renderJobsQueue() {
         <div class="job-status-row">
           <div class="loading-spinner-sm"></div>
           <span class="job-progress">${progress}</span>
-        </div>`;
+        </div>
+        ${hitlHtml}`;
     } else {
       statusHtml = '';
     }
@@ -216,7 +268,9 @@ function renderJobsQueue() {
           <span>Errors: ${r.errors_encountered}</span>
           <span>Overall: ${r.scores ? (r.scores.overall * 100).toFixed(0) + '%' : '-'}</span>
         </div>
+        ${r.recording_path ? `<div class="recording-container"><video controls class="recording-video" preload="metadata"><source src="/media/${esc(r.recording_path)}" type="video/mp4"></video></div>` : ''}
         ${r.scores ? renderScoreBars(r.scores) : ''}
+        ${renderStepDetails(r.step_details)}
       </div>
     `).join('');
 
@@ -249,6 +303,16 @@ function renderJobsQueue() {
   container.querySelectorAll('.result-card').forEach(card => {
     animateScoreBars(card);
   });
+
+  // Restore HITL input values and focus after re-render
+  container.querySelectorAll('.hitl-prompt').forEach(el => {
+    const tid = el.dataset.taskId;
+    const input = el.querySelector('.hitl-input');
+    if (input && hitlValues[tid] !== undefined) {
+      input.value = hitlValues[tid];
+      if (tid === focusedTaskId) input.focus();
+    }
+  });
 }
 
 function dismissJob(jobId) {
@@ -261,6 +325,46 @@ function dismissJob(jobId) {
   } else {
     activeJobs.delete(jobId);
     renderJobsQueue();
+  }
+}
+
+// Allow Enter key to submit HITL responses
+document.getElementById('jobs-queue').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.classList.contains('hitl-input')) {
+    const btn = e.target.closest('.hitl-prompt').querySelector('.hitl-submit');
+    if (btn && !btn.disabled) btn.click();
+  }
+});
+
+async function submitHitlResponse(jobId, taskId, btn) {
+  const row = btn.closest('.hitl-prompt');
+  const input = row.querySelector('.hitl-input');
+  const answer = input.value.trim();
+  if (!answer) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/input?task_id=${encodeURIComponent(taskId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer }),
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      animate(row, {
+        opacity: [1, 0], height: [row.offsetHeight, 0], duration: 300, ease: 'inQuad',
+        onComplete: () => row.remove(),
+      });
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+      alert(data.error || 'Failed to submit response');
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Send';
   }
 }
 
@@ -373,10 +477,10 @@ function renderRadarChart(avgScores) {
       datasets: [{
         label: 'Average Score',
         data: values.map(v => v * 100),
-        backgroundColor: 'rgba(0, 255, 234, 0.1)',
-        borderColor: '#00ffea',
+        backgroundColor: chartTheme.accentFill,
+        borderColor: chartTheme.accent,
         borderWidth: 2,
-        pointBackgroundColor: '#00ffea',
+        pointBackgroundColor: chartTheme.accent,
         pointRadius: 4,
       }],
     },
@@ -384,10 +488,10 @@ function renderRadarChart(avgScores) {
       scales: {
         r: {
           min: 0, max: 100,
-          ticks: { stepSize: 25, color: '#5a7a7a', backdropColor: 'transparent' },
-          grid: { color: 'rgba(0, 255, 234, 0.06)' },
-          angleLines: { color: 'rgba(0, 255, 234, 0.06)' },
-          pointLabels: { color: '#d0e8e4', font: { size: 11 } },
+          ticks: { stepSize: 25, color: chartTheme.muted, backdropColor: 'transparent' },
+          grid: { color: chartTheme.grid },
+          angleLines: { color: chartTheme.grid },
+          pointLabels: { color: chartTheme.text, font: { family: chartTheme.font, size: 11 } },
         },
       },
       plugins: { legend: { display: false } },
@@ -412,8 +516,8 @@ function renderTrendChart(history) {
         {
           label: 'Overall',
           data: sorted.map(r => (r.score_overall * 100).toFixed(1)),
-          borderColor: '#00ffea',
-          backgroundColor: 'rgba(0, 255, 234, 0.08)',
+          borderColor: chartTheme.accent,
+          backgroundColor: chartTheme.accentFill,
           fill: true,
           tension: 0.3,
           pointRadius: 3,
@@ -421,7 +525,7 @@ function renderTrendChart(history) {
         {
           label: 'Completeness',
           data: sorted.map(r => (r.score_completeness * 100).toFixed(1)),
-          borderColor: '#00ff88',
+          borderColor: chartTheme.success,
           borderDash: [4, 4],
           tension: 0.3,
           pointRadius: 2,
@@ -429,7 +533,7 @@ function renderTrendChart(history) {
         {
           label: 'Reliability',
           data: sorted.map(r => (r.score_reliability * 100).toFixed(1)),
-          borderColor: '#ff2d7b',
+          borderColor: chartTheme.danger,
           borderDash: [4, 4],
           tension: 0.3,
           pointRadius: 2,
@@ -438,11 +542,11 @@ function renderTrendChart(history) {
     },
     options: {
       scales: {
-        y: { min: 0, max: 100, ticks: { color: '#5a7a7a' }, grid: { color: 'rgba(0, 255, 234, 0.04)' } },
-        x: { ticks: { color: '#5a7a7a' }, grid: { display: false } },
+        y: { min: 0, max: 100, ticks: { color: chartTheme.muted }, grid: { color: chartTheme.grid } },
+        x: { ticks: { color: chartTheme.muted }, grid: { display: false } },
       },
       plugins: {
-        legend: { labels: { color: '#d0e8e4', boxWidth: 12, font: { family: "'SF Mono', 'Fira Code', monospace", size: 11 } } },
+        legend: { labels: { color: chartTheme.text, boxWidth: 12, font: { family: chartTheme.font, size: 11 } } },
       },
     },
   });
@@ -506,10 +610,10 @@ function renderUrlPerformance(data) {
       datasets: [{
         label: 'Score',
         data: values.map(v => v * 100),
-        backgroundColor: 'rgba(0, 255, 234, 0.1)',
-        borderColor: '#00ffea',
+        backgroundColor: chartTheme.accentFill,
+        borderColor: chartTheme.accent,
         borderWidth: 2,
-        pointBackgroundColor: '#00ffea',
+        pointBackgroundColor: chartTheme.accent,
         pointRadius: 4,
       }],
     },
@@ -517,10 +621,10 @@ function renderUrlPerformance(data) {
       scales: {
         r: {
           min: 0, max: 100,
-          ticks: { stepSize: 25, color: '#5a7a7a', backdropColor: 'transparent' },
-          grid: { color: 'rgba(0, 255, 234, 0.06)' },
-          angleLines: { color: 'rgba(0, 255, 234, 0.06)' },
-          pointLabels: { color: '#d0e8e4', font: { size: 11 } },
+          ticks: { stepSize: 25, color: chartTheme.muted, backdropColor: 'transparent' },
+          grid: { color: chartTheme.grid },
+          angleLines: { color: chartTheme.grid },
+          pointLabels: { color: chartTheme.text, font: { family: chartTheme.font, size: 11 } },
         },
       },
       plugins: { legend: { display: false } },
@@ -655,6 +759,14 @@ function showDetail(index) {
       <span>Duration: ${r.duration_seconds.toFixed(1)}s</span>
       <span>Errors: ${r.errors_encountered}</span>
     </div>
+    ${r.recording_path ? `
+    <h3 style="margin-top:1rem">Recording</h3>
+    <div class="recording-container">
+      <video controls class="recording-video" preload="metadata">
+        <source src="/media/${esc(r.recording_path)}" type="video/mp4">
+        Your browser does not support video playback.
+      </video>
+    </div>` : ''}
     <h3 style="margin-top:1rem">Score Breakdown</h3>
     ${renderScoreBars(scores)}
     ${renderStepDetails(r.step_details)}
@@ -713,6 +825,7 @@ function renderStepDetails(steps) {
         ${steps.map(s => `
           <div class="step-detail-card">
             <div class="step-detail-header">Step ${s.step}</div>
+            ${s.screenshot ? `<div class="step-field"><span class="step-field-label">Screenshot</span><div class="step-screenshot-wrap"><img class="step-screenshot" src="/media/${esc(s.screenshot)}" alt="Step ${s.step} screenshot" loading="lazy" onclick="openScreenshot(this.src)"></div></div>` : ''}
             ${s.reasoning ? `<div class="step-field"><span class="step-field-label">Reasoning</span><div class="step-field-content">${esc(s.reasoning).substring(0, 500)}${s.reasoning.length > 500 ? '...' : ''}</div></div>` : ''}
             ${s.code ? `<div class="step-field"><span class="step-field-label">Code</span><pre class="step-code">${esc(s.code)}</pre></div>` : ''}
             ${s.observations ? `<div class="step-field"><span class="step-field-label">Observations</span><div class="step-field-content">${esc(s.observations)}</div></div>` : ''}
@@ -721,6 +834,17 @@ function renderStepDetails(steps) {
         `).join('')}
       </div>
     </div>`;
+}
+
+function openScreenshot(src) {
+  const overlay = document.createElement('div');
+  overlay.className = 'screenshot-overlay';
+  overlay.innerHTML = `<img src="${src}" alt="Screenshot full view">`;
+  overlay.addEventListener('click', () => {
+    animate(overlay, { opacity: [1, 0], duration: 200, onComplete: () => overlay.remove() });
+  });
+  document.body.appendChild(overlay);
+  animate(overlay, { opacity: [0, 1], duration: 250 });
 }
 
 // ── Delete Records ──

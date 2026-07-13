@@ -44,9 +44,15 @@ def _init_tables(conn: duckdb.DuckDBPyConnection) -> None:
             score_reliability DOUBLE NOT NULL DEFAULT 0.0,
             score_overall DOUBLE NOT NULL DEFAULT 0.0,
             step_details VARCHAR DEFAULT '[]',
+            recording_path VARCHAR,
             created_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
+    # Migration: add recording_path column to existing tables
+    try:
+        conn.execute("ALTER TABLE browse_results ADD COLUMN recording_path VARCHAR")
+    except Exception:
+        pass  # Column already exists
 
 
 def save_result(
@@ -61,6 +67,7 @@ def save_result(
     errors_encountered: int,
     scores: dict,
     step_details: list[dict] | None = None,
+    recording_path: str | None = None,
 ) -> None:
     conn = get_connection()
     conn.execute(
@@ -69,8 +76,9 @@ def save_result(
             url, task, found, confidence, answer, error,
             steps_taken, duration_seconds, errors_encountered,
             score_completeness, score_confidence, score_efficiency,
-            score_speed, score_reliability, score_overall, step_details
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            score_speed, score_reliability, score_overall, step_details,
+            recording_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             url, task, found, confidence, answer, error,
@@ -78,6 +86,7 @@ def save_result(
             scores["completeness"], scores["confidence"], scores["efficiency"],
             scores["speed"], scores["reliability"], scores["overall"],
             json.dumps(step_details or []),
+            recording_path,
         ],
     )
 

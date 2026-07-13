@@ -1,4 +1,6 @@
+import random
 import threading
+import time
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -11,6 +13,11 @@ from smolagents import tool
 
 # Shared thread-local storage with browser.py
 _thread_local = threading.local()
+
+# HITL (Human-in-the-Loop) coordination
+# Maps task_id -> {"question": str, "answer": str | None, "event": threading.Event}
+_hitl_pending: dict[str, dict] = {}
+_hitl_lock = threading.Lock()
 
 
 def _get_driver():
@@ -77,6 +84,34 @@ def go_back() -> None:
 
 
 @tool
+def go_to_with_retry(url: str, max_retries: int = 3) -> str:
+    """
+    Navigates to a URL with automatic retry on 429 (Too Many Requests) errors.
+    Use this instead of go_to() when a website is rate-limiting you.
+    Args:
+        url: The URL to navigate to
+        max_retries: Maximum number of retries (default: 3)
+    """
+    driver = _get_driver()
+    for attempt in range(1, max_retries + 1):
+        driver.get(url)
+        # Check for 429 responses by inspecting page content
+        title = (driver.title or "").lower()
+        body = ""
+        try:
+            body = driver.find_element(By.TAG_NAME, "body").text[:500].lower()
+        except Exception:
+            pass
+        is_429 = "429" in title or "too many requests" in title or "too many requests" in body or "rate limit" in body
+        if not is_429:
+            return f"Navigated to {url}"
+        if attempt < max_retries:
+            delay = min(10 * (2 ** (attempt - 1)), 60) + random.uniform(1, 5)
+            time.sleep(delay)
+    return f"Warning: page at {url} may still be rate-limited after {max_retries} retries"
+
+
+@tool
 def close_popups() -> str:
     """
     Closes any visible modal or pop-up on the page. Use this to dismiss pop-up windows.
@@ -112,3 +147,38 @@ def close_popups() -> str:
     # Fallback: press Escape
     webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
     return "Modals closed"
+
+
+@tool
+def ask_user(question: str) -> str:
+    """
+    Ask the human user a question and wait for their response.
+    Use this when you need information only the user can provide, such as:
+    - OTP / verification codes sent to their phone or email
+    - Login credentials (username, password)
+    - CAPTCHA solutions
+    - Any other information that requires human input
+
+    The agent will pause until the user responds.
+
+    Args:
+        question: The question to ask the user (be specific about what you need)
+    """
+    task_id = getattr(_thread_local, "task_id", None)
+    if task_id is None:
+        return "Error: HITL not available — no task context found"
+
+    event = threading.Event()
+    with _hitl_lock:
+        _hitl_pending[task_id] = {"question": question, "answer": None, "event": event}
+
+    # Block until user responds (timeout after 5 minutes)
+    answered = event.wait(timeout=300)
+
+    with _hitl_lock:
+        entry = _hitl_pending.pop(task_id, None)
+
+    if not answered or entry is None or entry["answer"] is None:
+        return "Error: Timed out waiting for user response"
+
+    return entry["answer"]

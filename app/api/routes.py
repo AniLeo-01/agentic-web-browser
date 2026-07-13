@@ -3,10 +3,16 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from app.agent.browser import run_agent_task
+from app.agent.tools import _hitl_lock, _hitl_pending
 from app.core.db import delete_all_results, delete_result, get_all_urls, get_dashboard_stats, get_results, get_url_performance, save_result
 from app.core.models import TaskRequest
+
+
+class HitlResponse(BaseModel):
+    answer: str
 
 router = APIRouter()
 
@@ -18,10 +24,10 @@ def _get_job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
 
 
-async def _run_single_task(url: str, task: str) -> dict:
+async def _run_single_task(url: str, task: str, task_id: str | None = None) -> dict:
     """Run a single task and return the result dict."""
     try:
-        outcome = await run_agent_task(url, task)
+        outcome = await run_agent_task(url, task, task_id=task_id)
         save_result(
             url=url,
             task=task,
@@ -34,6 +40,7 @@ async def _run_single_task(url: str, task: str) -> dict:
             errors_encountered=outcome["errors_encountered"],
             scores=outcome["scores"],
             step_details=outcome.get("step_details"),
+            recording_path=outcome.get("recording_path"),
         )
         return {"task": task, **outcome}
     except Exception as e:
@@ -56,8 +63,12 @@ async def _run_job(job_id: str, url: str, tasks: list[str]) -> None:
     job = _jobs[job_id]
     job["total_tasks"] = len(tasks)
 
+    # Generate unique task_ids for HITL coordination
+    task_ids = [f"{job_id}_{i}" for i in range(len(tasks))]
+    job["task_ids"] = task_ids
+
     results = await asyncio.gather(
-        *[_run_single_task(url, task) for task in tasks]
+        *[_run_single_task(url, task, task_id=tid) for task, tid in zip(tasks, task_ids)]
     )
     job["results"] = list(results)
     job["status"] = "completed"
@@ -95,7 +106,39 @@ async def get_job(job_id: str) -> dict:
     job = _get_job(job_id)
     if not job:
         return {"error": "Job not found"}
-    return job
+
+    # Attach any pending HITL questions for this job's tasks
+    pending_inputs = []
+    task_ids = job.get("task_ids", [])
+    tasks = job.get("tasks", [])
+    with _hitl_lock:
+        for i, tid in enumerate(task_ids):
+            if tid in _hitl_pending and _hitl_pending[tid]["answer"] is None:
+                task_name = tasks[i] if i < len(tasks) else f"Task {i}"
+                pending_inputs.append({
+                    "task_id": tid,
+                    "task": task_name,
+                    "question": _hitl_pending[tid]["question"],
+                })
+    job_data = {**job, "pending_inputs": pending_inputs}
+    return job_data
+
+
+@router.post("/jobs/{job_id}/input")
+async def submit_input(job_id: str, task_id: str, response: HitlResponse) -> dict:
+    """Submit a user response to a pending HITL question."""
+    job = _get_job(job_id)
+    if not job:
+        return {"error": "Job not found"}
+
+    with _hitl_lock:
+        entry = _hitl_pending.get(task_id)
+        if entry is None:
+            return {"error": "No pending question for this task"}
+        entry["answer"] = response.answer
+        entry["event"].set()
+
+    return {"status": "ok", "task_id": task_id}
 
 
 @router.get("/results")

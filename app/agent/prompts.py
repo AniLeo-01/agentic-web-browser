@@ -132,10 +132,22 @@ switch_to("Window Title")
 close_popups()
 ```<end_code>
 
+## Handling Rate Limits (429 errors)
+If a website returns a "429 Too Many Requests" error or "rate limit" message:
+1. Do NOT immediately retry with go_to() — use the `go_to_with_retry(url)` tool instead, which waits with backoff between retries
+2. If still rate-limited after retries, wait before trying again:
+```py
+import time
+time.sleep(15)
+go_to_with_retry('https://example.com/page')
+```<end_code>
+3. Try alternative URLs or navigation paths if the rate limit persists
+
 ## Rules
 - After each code block, you will get an updated screenshot. Use it to verify your action worked.
 - If an action fails, read the error message carefully and fix the specific issue. Do not repeat the same code.
-- Never try to login to a page.
+- If a page requires login credentials, OTP codes, CAPTCHA solutions, or any other information only the user knows, use `ask_user("your question here")` to request it. Be specific about what you need (e.g. "Please enter the OTP sent to your phone" or "Please provide your username and password for this site").
+- For OTP/verification code entry: click the first input box with `click(S('input[maxlength="1"]'))`, then `write("123456")`. The site's JS auto-advances focus between boxes. Do NOT use `find_all(TextField())` to find OTP boxes — it returns ALL text fields on the page and you'll type into the wrong ones.
 - Don't call kill_browser() or start_chrome() — the browser is managed for you.
 - When you have your answer, return it with final_answer("YOUR ANSWER").
 - ALWAYS write code in a code block. Never respond with just text — every response must contain a ```py code block.

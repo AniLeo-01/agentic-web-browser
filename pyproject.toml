@@ -9,10 +9,13 @@ dependencies = [
     "fastapi>=0.138.0",
     "helium>=7.0.2",
     "httpx>=0.28.1",
+    "imageio>=2.37.3",
+    "imageio-ffmpeg>=0.6.0",
     "pillow>=12.2.0",
     "pydantic-settings>=2.14.2",
     "pytest>=9.1.1",
     "selenium>=4.45.0",
     "smolagents[openai]>=1.26.0",
+    "tqdm>=4.67.0",
     "uvicorn>=0.49.0",
 ]
